@@ -1,0 +1,83 @@
+# vim: set sts=2 ts=8 sw=2 tw=99 et ft=python:
+import os
+
+projectName = 'curl'
+
+project = builder.LibraryProject(projectName)
+project.sources += [
+  os.path.join(Extension.ext_root, 'src', 'extension.cpp'),
+  os.path.join(Extension.ext_root, 'src', 'curlmanager.cpp'),
+  os.path.join(Extension.ext_root, 'src', 'curlthread.cpp'),
+  os.path.join(Extension.ext_root, 'src', 'natives.cpp'),
+  os.path.join(Extension.ext_root, 'src', 'opensslmanager.cpp'),
+  os.path.join(Extension.ext_root, 'src', 'opensslthread.cpp'),
+  os.path.join(Extension.ext_root, 'src', 'sha0.cpp'),
+  os.path.join(Extension.sm_root, 'public', 'smsdk_ext.cpp'),
+]
+
+# Static zlib, OpenSSL, libssh2 and libcurl built by ci/build_deps.py, one prefix per
+# platform and arch: deps/deps-<linux|windows>-<x86|x86_64>/{include,lib}.
+# In CI they are the artifacts of the build-deps jobs (downloaded into deps/).
+def DepsRoot(cxx):
+  root = os.path.join(Extension.ext_root, 'deps',
+                      'deps-{0}-{1}'.format(cxx.target.platform, cxx.target.arch))
+  if not os.path.isdir(os.path.join(root, 'lib')):
+    raise Exception('Missing dependencies in {0}: run ci/build_deps.py --arch {1} --prefix {0}'
+                    .format(root, cxx.target.arch))
+  return root
+
+for sdk_name in Extension.sdks:
+  sdk = Extension.sdks[sdk_name]
+  if sdk['name'] in ['mock']:
+    continue
+
+  for cxx in builder.targets:
+    if not cxx.target.arch in sdk['platforms'][cxx.target.platform]:
+      continue
+
+    binary = Extension.HL2ExtConfig(project, builder, cxx, projectName + '.ext', sdk)
+    deps = DepsRoot(cxx)
+    lib = os.path.join(deps, 'lib')
+
+    # Our headers first, so no system curl/OpenSSL header is picked up.
+    binary.compiler.cxxincludes[:0] = [os.path.join(deps, 'include')]
+    binary.compiler.defines += [
+      'CURL_STATICLIB',
+      # Some natives still map to options and calls curl or OpenSSL 3 mark deprecated
+      # (CURLOPT_HTTPPOST, CURLINFO_LASTSOCKET, MD4_Init...): keep them, without warnings.
+      'CURL_DISABLE_DEPRECATION',
+      'OPENSSL_SUPPRESS_DEPRECATED',
+    ]
+
+    if cxx.target.platform == 'windows':
+      binary.compiler.linkflags += [
+        os.path.join(lib, 'libcurl.lib'),
+        os.path.join(lib, 'libssh2.lib'),
+        os.path.join(lib, 'libssl.lib'),
+        os.path.join(lib, 'libcrypto.lib'),
+        os.path.join(lib, 'zlib.lib'),
+        'ws2_32.lib',
+        'crypt32.lib',
+        'bcrypt.lib',
+        'iphlpapi.lib',
+        'secur32.lib',
+      ]
+    else:
+      binary.compiler.linkflags += [
+        # Keep the static libraries' symbols local, so they never bind to (or
+        # replace) another curl/OpenSSL already loaded in the server process.
+        '-Wl,--exclude-libs,ALL',
+        os.path.join(lib, 'libcurl.a'),
+        os.path.join(lib, 'libssh2.a'),
+        os.path.join(lib, 'libssl.a'),
+        os.path.join(lib, 'libcrypto.a'),
+        os.path.join(lib, 'libz.a'),
+        # 64-bit integer helpers the 32-bit libraries need (__divmoddi4...): from the
+        # static libgcc, not libgcc_s.so (GCC_7.0.0 symbol version).
+        '-lgcc',
+        '-lpthread',
+        '-ldl',
+        '-lrt',
+      ]
+
+Extension.extensions += builder.Add(project)

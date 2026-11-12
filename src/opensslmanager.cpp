@@ -5,6 +5,7 @@
 #include <openssl/md2.h>
 #include <openssl/sha.h>
 #include <openssl/ripemd.h>
+#include "sha0.h"
 
 
 #define	MD5_FILE_BUFFER_SIZE		1024*16
@@ -21,7 +22,9 @@
 
 OpensslManager g_OpensslManager;
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
 static IMutex **ssl_lockarray;
+#endif
 
 static void MD5_File(FILE *file, unsigned char **output, int *outlength)
 {
@@ -63,6 +66,7 @@ static void MD4_File(FILE *file, unsigned char **output, int *outlength)
 	MD4_Final(*output, &c);
 }
 
+#ifndef OPENSSL_NO_MD2
 static void MD2_File(FILE *file, unsigned char **output, int *outlength)
 {
 	*output = new unsigned char[MD2_DIGEST_LENGTH];
@@ -82,25 +86,26 @@ static void MD2_File(FILE *file, unsigned char **output, int *outlength)
 	}
 	MD2_Final(*output, &c);
 }
+#endif
 
 static void SHA_File(FILE *file, unsigned char **output, int *outlength)
 {
 	*output = new unsigned char[SHA_DIGEST_LENGTH];
 	*outlength = SHA_DIGEST_LENGTH;
 
-	SHA_CTX c;
+	SHA0_CTX c;
 	int i;
 	unsigned char buf[SHA_FILE_BUFFER_SIZE];
 	
-	SHA_Init(&c);
+	SHA0_Init(&c);
 	for (;;)
 	{
 		i = fread(buf,1,SHA_FILE_BUFFER_SIZE,file);
 		if(i <= 0)
 			break;
-		SHA_Update(&c,buf,(unsigned long)i);
+		SHA0_Update(&c,buf,(unsigned long)i);
 	}
-	SHA_Final(*output, &c);
+	SHA0_Final(*output, &c);
 }
 
 static void SHA1_File(FILE *file, unsigned char **output, int *outlength)
@@ -223,6 +228,8 @@ static void RIPEMD160_File(FILE *file, unsigned char **output, int *outlength)
 	RIPEMD160_Final(*output, &c);
 }
 
+// OpenSSL 1.1.0+ locks internally: the callbacks below are only needed for older versions.
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
 static void ssl_locking_callback(int mode, int type, const char *file, int line)
 {
     if(mode & CRYPTO_LOCK)
@@ -240,8 +247,11 @@ static unsigned long ssl_id_function(void)
 }
 #endif
 
+#endif
+
 void OpensslManager::SDK_OnLoad()
 {
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
 	ssl_lockarray = (IMutex **)OPENSSL_malloc(CRYPTO_num_locks() * sizeof(IMutex *));
 	for(int i = 0; i < CRYPTO_num_locks(); i++)
     {
@@ -252,10 +262,12 @@ void OpensslManager::SDK_OnLoad()
 	CRYPTO_set_id_callback(ssl_id_function);
 #endif
 	CRYPTO_set_locking_callback(ssl_locking_callback);
+#endif
 }
 
 void OpensslManager::SDK_OnUnload()
 {
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
 #ifdef PLATFORM_LINUX
 	CRYPTO_set_id_callback(NULL);
 #endif
@@ -265,6 +277,7 @@ void OpensslManager::SDK_OnUnload()
 		ssl_lockarray[i]->DestroyThis();
 	} 
 	OPENSSL_free(ssl_lockarray);
+#endif
 }
 
 
@@ -282,8 +295,12 @@ bool OpensslManager::HashFile(Openssl_Hash algorithm, FILE *pFile, unsigned char
 			MD4_File(pFile, output, outlength);
 			return true;
 		case Openssl_Hash_MD2:
+#ifndef OPENSSL_NO_MD2
 			MD2_File(pFile, output, outlength);
 			return true;
+#else
+			return false;
+#endif
 		case Openssl_Hash_SHA:
 			SHA_File(pFile, output, outlength);
 			return true;
@@ -324,12 +341,16 @@ bool OpensslManager::HashString(Openssl_Hash algorithm, unsigned char *input, in
 			*outlength = MD4_DIGEST_LENGTH;
 			return true;
 		case Openssl_Hash_MD2:
+#ifndef OPENSSL_NO_MD2
 			MD2(input, size, output);
 			*outlength = MD2_DIGEST_LENGTH;
 			return true;
+#else
+			return false;
+#endif
 		case Openssl_Hash_SHA:
-			SHA(input, size, output);
-			*outlength = SHA_DIGEST_LENGTH;
+			SHA0(input, size, output);
+			*outlength = SHA0_DIGEST_LENGTH;
 			return true;
 		case Openssl_Hash_SHA1:
 			SHA1(input, size, output);
