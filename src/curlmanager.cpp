@@ -25,9 +25,9 @@ static size_t curl_write_function_default(void *ptr, size_t bytes, size_t nmemb,
 {
 	FILE *file = (FILE *)stream;
 #ifdef WIN32
-	if(file->_file >= 3)
+	if(_fileno(file) >= 3)
 #else
-	if(file->_fileno >= 3)
+	if(fileno(file) >= 3)
 #endif
 	{
 		return fwrite(ptr, bytes, nmemb, file); 
@@ -184,7 +184,7 @@ void cURLManager::SDK_OnUnload()
 	curlhandle_list_mutex->Lock();
 	if(g_cURLThread_List.size() > 0)
 	{
-		printf("[%s] Waiting %d cURL Threads Terminate...\n",SMEXT_CONF_LOGTAG,g_cURLThread_List.size());		
+		printf("[%s] Waiting %d cURL Threads Terminate...\n",SMEXT_CONF_LOGTAG,(int)g_cURLThread_List.size());		
 
 		SourceHook::List<cURLThread *>::iterator iter = g_cURLThread_List.begin();
 		cURLThread *pInfo;
@@ -744,7 +744,8 @@ void cURLManager::LoadcURLOption(cURLHandle *handle)
 	for(iter2=handle->opt_int_list.begin(); iter2!=handle->opt_int_list.end(); iter2++)
 	{
 		pInfo2 = (*iter2);
-		if((handle->lasterror = curl_easy_setopt(handle->curl, pInfo2->opt, pInfo2->value)) != CURLE_OK)
+		// curl reads long options as long: an int vararg is not enough on x86_64.
+		if((handle->lasterror = curl_easy_setopt(handle->curl, pInfo2->opt, (long)pInfo2->value)) != CURLE_OK)
 			return;
 	}
 
@@ -790,6 +791,9 @@ CURLFORMcode cURLManager::cURLFormAdd(IPluginContext *pContext, const cell_t *pa
 	char *form_data[10];
 	memset(form_data, 0, sizeof(form_data));
 
+	// One buffer per entry: curl_formadd() reads them after the loop.
+	char realpaths[10][PLATFORM_MAX_PATH];
+
 	cell_t *addr;
 	int count = 0;
 	int err;
@@ -817,10 +821,9 @@ CURLFORMcode cURLManager::cURLFormAdd(IPluginContext *pContext, const cell_t *pa
 				}
 				if(form_code == CURLFORM_FILE || form_code == CURLFORM_FILECONTENT) // absolute path
 				{
-					char realpath[PLATFORM_MAX_PATH];
-					g_pSM->BuildPath(Path_Game, realpath, sizeof(realpath), "%s", form_data[count]);
+					g_pSM->BuildPath(Path_Game, realpaths[count], sizeof(realpaths[count]), "%s", form_data[count]);
 				
-					form_data[count] = realpath;
+					form_data[count] = realpaths[count];
 				}
 				form_opts[count] = form_code;
 				count++;
@@ -835,7 +838,8 @@ CURLFORMcode cURLManager::cURLFormAdd(IPluginContext *pContext, const cell_t *pa
 				}
 				form_opts[count] = form_code;
 				value = *addr;
-				form_data[count] = (char *)value;
+				// curl_formadd() reads lengths as long through its varargs.
+				form_data[count] = (char *)(intptr_t)value;
 				count++;
 				i++;
 				break;

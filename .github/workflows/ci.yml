@@ -1,0 +1,75 @@
+name: Build AlliedModders Extension
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - "*"
+  pull_request:
+    branches:
+      - master
+      - main
+
+jobs:
+  # Static zlib, OpenSSL, libssh2 and libcurl per platform and arch (pinned and
+  # checksummed in ci/build_deps.py), cached until that script changes.
+  build-deps:
+    name: deps ${{ matrix.os }} ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+        arch: [x86, x86_64]
+    runs-on: ${{ matrix.os }}
+    env:
+      DEPS_NAME: deps-${{ startsWith(matrix.os, 'windows') && 'windows' || 'linux' }}-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore dependencies
+        uses: actions/cache@v6
+        id: cache
+        with:
+          path: deps/${{ env.DEPS_NAME }}
+          key: ${{ env.DEPS_NAME }}-${{ matrix.os }}-${{ hashFiles('ci/build_deps.py') }}
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-multilib g++-multilib cmake make perl
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows' && steps.cache.outputs.cache-hit != 'true'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch == 'x86' && 'x86' || 'x64' }}
+
+      - uses: actions/setup-python@v7
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          python-version: 3.13
+
+      - name: Build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: python -I ci/build_deps.py --arch ${{ matrix.arch }} --prefix deps/${{ env.DEPS_NAME }} --work ${{ runner.temp }}/deps-work
+
+      - name: Upload dependencies
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.DEPS_NAME }}
+          path: deps/${{ env.DEPS_NAME }}
+          if-no-files-found: error
+          retention-days: 1
+
+  build-release-extension:
+    uses: srcdslab/ci-workflows/.github/workflows/shared_build_release_am_extension.yml@v1
+    needs: build-deps
+    with:
+      sdks: "css"
+      # Each deps artifact lands in deps/<artifact name>/, where src/AMBuilder looks.
+      artifact-path: "deps"
+      submodules: "recursive"

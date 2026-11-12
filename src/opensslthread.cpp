@@ -35,9 +35,9 @@ static void openssl_hash_FramAction(void *data)
 	}
 	
 	if(handle->output != NULL)
-		delete handle->output;
+		delete [] handle->output;
 	if(handle->path != NULL)
-		delete handle->path;
+		delete [] handle->path;
 	delete handle;
 }
 
@@ -75,7 +75,7 @@ void OpensslThread::RunFileHash()
 
 clean:
 	if(output != NULL)
-		delete output;
+		delete [] output;
 
 	fclose(pFile);
 }
